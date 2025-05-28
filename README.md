@@ -5,6 +5,7 @@
 >> gcc lex.yy.c -o lexico        # Compila com a biblioteca do Flex
 >> ./lexico < entrada.txt        # Roda passando a entrada (se não tiver entrada retire)
 ```
+# Para compilar o analisador sintático
 
 ```
 >> bison -dv sintatico.y                            # Gera sintatico.tab.c e sintatico.tab.h
