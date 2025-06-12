@@ -1,6 +1,8 @@
 /*Analizador Lexico*/
 %{
-  # include "sintatico.tab.h"
+  # include "sintatico_v1.tab.h"
+  #include <string.h>
+  #include <stdlib.h>
 %}
 
 %x COMENTARIO_M
