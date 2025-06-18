@@ -2,13 +2,18 @@
 /* considerando notacao polonesa para expressoes */
 %{
 #include <stdio.h> 
+#include <stdlib.h>
+#include <string.h>
+
+#define MAX_LINE 1024
+
 int yylex(void);
 void yyerror(const char *s);
 
 extern FILE *yyin;
 extern FILE *yyout;
 
-char* currentType = "";
+char* currentType;
 int semanticError = 0;
 
 struct node {
@@ -25,14 +30,10 @@ struct symbolTable {
 };
 typedef struct symbolTable symbolTable;
 
-node* firstNode = (node*) malloc(sizeof(node));
-firstNode->name = "-1";
-firstNode->type = "-1";
-firstNode->used = -1;
-firstNode->next = NULL;
-symbolTable ST = {0, firstNode};
+node* firstNode;
+symbolTable ST;
 
-void insert(symbolTable* table, char* name, char* type);
+void insert(symbolTable* table, char* name);
 
 int search(symbolTable* table, char* name);
 
@@ -51,9 +52,9 @@ int isNotUsedVariable(symbolTable* table);
 %left '+' '-'
 %left '*' '/' '%'
 
-%token INT
-%token FLOAT
-%token ID
+//%token INT
+//%token FLOAT
+//%token ID
 %token STRING
 %token CHAR
 %token OPERADOR
@@ -98,42 +99,44 @@ int isNotUsedVariable(symbolTable* table);
 /* Regras definindo a GLC e acoes correspondentes */
 /* neste nosso exemplo quase todas as acoes estao vazias */
 input:    /* empty */
-        | input line
-;
-line:     '\n'
-        | programa '\n'  {;}
+        | programa {;}
 ;
 programa:	'{' lista_cmds '}'	{;}
-		|   lista_declaracoes '{' lista_cmds '}' 
+		|   lista_declaracoes  {;} 
+		|   lista_declaracoes '{' lista_cmds '}'
 {
+	printf("Sintaxe correta!\n");
 	if(semanticError) {
-		print("Sintaxe correta!\n");
 		printf("ERROR: Variavel não declarada!\n");
 	} else {
 		if(isNotUsedVariable(&ST)) {
 			printf("WARNING: Variavel declarada não usada!\n");
+		} else {
+			printf("Semantica correta!\n");
 		}
 	}
+
 };
 
 lista_declaracoes: declaracao 
 		|		   declaracao lista_declaracoes
 ;
-declaracao:         CHAR_KW lista_ids	{currentType = "CHAR";printf ("declaracao CHAR\n");} 
-		|           DOUBLE_KW lista_ids	{currentType = "DOUBLE";printf ("declaracao DOUBLE\n");} 
-		|           FLOAT_KW lista_ids	{currentType = "FLOAT";printf ("declaracao FLOAT\n");} 
-		|           INT_KW lista_ids	{currentType = "INT";printf ("declaracao INT\n");} 
-		|           LONG_KW lista_ids	{currentType = "LONG";printf ("declaracao LONG\n");} 
-		|           SHORT_KW lista_ids	{currentType = "SHORT";printf ("declaracao SHORT\n");} 
+declaracao:         CHAR_KW {currentType = "CHAR";} lista_ids {;} 
+		|           DOUBLE_KW {currentType = "DOUBLE";} lista_ids {;} 
+		|           FLOAT_KW {currentType = "FLOAT";} lista_ids	{;} 
+		|           INT_KW {currentType = "INT";} lista_ids	{;} 
+		|           LONG_KW {currentType = "LONG";} lista_ids {;} 
+		|           SHORT_KW {currentType = "SHORT";} lista_ids {;} 
 ;
-lista_ids:			ID ';'	{insert(&ST, $1, currentType);}				
-		|			ID ',' lista_ids	{insert(&ST, $1, currentType);}							
+lista_ids:			ID ';'	{insert(&ST, $1);}				
+		|			ID ',' lista_ids	{insert(&ST, $1);}							
 
 lista_cmds:	cmd	';'			{;}
 		| cmd ';' lista_cmds	{;}
 ;
 cmd:		ID '=' exp		
-{// printf("Expressao analisada: %s\n", $3);free($3);
+{ //printf("Expressao analisada: %s\n", $3);free($3);
+//printf("%s\n", $1);
 	if(!search(&ST, $1)) {
 		semanticError = 1;
 	}
@@ -145,7 +148,7 @@ exp:		INT				{ $$ = $1; }
 { 
 	if(!search(&ST, $1)) {
 		semanticError = 1;
-	}			
+	}		
 					
 	$$ = $1;
 }
@@ -173,10 +176,24 @@ exp:		INT				{ $$ = $1; }
 ;
 %%
 
-void insert(symbolTable* table, char* name, char* type) {
+void initSymbolTable(symbolTable* table) {
+	firstNode = (node*) malloc(sizeof(node));
+    
+    firstNode->name = "-1";
+    firstNode->type = "-1";
+    firstNode->used = -1;
+    firstNode->next = NULL;
+
+    ST.size = 0;
+    ST.head = firstNode;
+}
+
+// insere um simbolo na tabela
+void insert(symbolTable* table, char* name) {
 	node* n = (node*) malloc(sizeof(node));
 	n->name = name;
-	n->type = type;
+	n->type = strdup(currentType);
+	//printf("%s\n", n->type);
 	n->used = 0;
 	n->next = table->head;
 
@@ -184,11 +201,14 @@ void insert(symbolTable* table, char* name, char* type) {
 	table->size++;
 
 	printf("Variavel %s criada!\n", n->name);
+	//print_table(&ST);
 }
 
+
+// retorna 1 se achar o simbolo
 int search(symbolTable* table, char* symbolName) {
 	for(node* n = table->head; n->name != "-1"; n = n->next) {
-		if(n->name == symbolName) {
+		if(strcmp(n->name, symbolName) == 0) {
 			n->used = 1;
 			return 1;
 		}
@@ -196,6 +216,8 @@ int search(symbolTable* table, char* symbolName) {
 	return 0;
 } 
 
+
+// printa todos os simbolos da tabela
 void print_table(symbolTable* table) {
 	printf("Name\t\tType\t\tUsed\n");
 	for(node* n = table->head; n->name != "-1"; n = n->next) {
@@ -214,19 +236,45 @@ int isNotUsedVariable(symbolTable* table) {
 }
 
 
-main(int argc, char **argv) {
-	++argv; --argc; 	    /* abre arquivo de entrada se houver */
-	if(argc > 0)
-		yyin = fopen(argv[0],"rt");
-	else
-		yyin = stdin;    /* cria arquivo de saida se especificado */
-	if(argc > 1)
-		yyout = fopen(argv[1],"wt");
-	else
-		yyout = stdout;
+int main(int argc, char **argv) {
+	currentType = "";
+	
+	if(argc > 0) {
+		FILE *output = fopen("input_formatado.txt", "w");
+		if (output == NULL) {
+			perror("Erro ao abrir o arquivo de saída");
+			return 1;
+		}
+
+		char line[MAX_LINE];
+		int isFirstLine = 1;
+
+		// Ler linha a linha da entrada padrão
+		while (fgets(line, sizeof(line), stdin)) {
+			// Remove o \n do final da linha, se existir
+			line[strcspn(line, "\r\n")] = '\0';
+
+			// Se não for a primeira linha, escreve um espaço antes
+			if (!isFirstLine) {
+				fputc(' ', output);
+			}
+
+			// Escreve a linha no arquivo de saída
+			fputs(line, output);
+
+			isFirstLine = 0;
+		}
+
+		fclose(output);
+	}
+
+	yyin = fopen("input_formatado.txt","rt");
+
+	initSymbolTable(&ST);
 	yyparse();
-	fclose(yyin);
-	fclose(yyout);
+    fclose(yyin);
+	print_table(&ST);
+	return 0;
 }
 
 void yyerror(const char *s) {
