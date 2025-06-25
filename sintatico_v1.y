@@ -280,5 +280,3 @@ int main(int argc, char **argv) {
 void yyerror(const char *s) {
     printf("Problema com a analise sintatica: %s\n", s);
 }
-
-
