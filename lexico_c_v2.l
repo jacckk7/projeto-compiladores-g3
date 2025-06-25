@@ -1,6 +1,6 @@
 /*Analizador Lexico*/
 %{
-  # include "sintatico.tab.h"
+  # include "sintatico_v1.tab.h"
 %}
 
 %x COMENTARIO_M
