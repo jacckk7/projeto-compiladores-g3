@@ -135,12 +135,14 @@ lista_cmds:	cmd	';'			{;}
 		| cmd ';' lista_cmds	{;}
 ;
 cmd:		ID '=' exp		
-{ //printf("Expressao analisada: %s\n", $3);free($3);
-//printf("%s\n", $1);
-	if(!search(&ST, $1)) {
-		semanticError = 1;
-	}
-}
+			{  //printf("Expressao analisada: %s\n", $3);free($3);
+				//printf("%s\n", $1);
+				if(!search(&ST, $1)) {
+					semanticError = 1;
+				}
+				 printf("Atribuicao: %s = %s\n", $1, $3);
+				 free($1); free($3);
+			}	
 ;
 exp:		INT				{ $$ = $1; }
 		| FLOAT				{ $$ = $1; }
@@ -278,5 +280,6 @@ int main(int argc, char **argv) {
 }
 
 void yyerror(const char *s) {
-    printf("Problema com a analise sintatica: %s\n", s);
+    extern int yylineno;
+    fprintf(stderr, "Erro na linha %d: %s\n", yylineno, s);
 }
