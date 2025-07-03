@@ -1,7 +1,7 @@
 # Para compilar o analisador léxico
 
 ```
->> flex lexico.l                 # Gera lex.yy.c
+>> flex lexico_c_v2.l            # Gera lex.yy.c
 >> gcc lex.yy.c -o lexico.exe    # Compila com a biblioteca do Flex
 >> ./lexico.exe < entrada.txt    # Roda passando a entrada (se não tiver entrada retire)
 ```
