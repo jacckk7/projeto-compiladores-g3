@@ -4,27 +4,42 @@
 #include <ctype.h>
 #include <stdbool.h>
 
+#define MAX_LINE_LENGTH 256
+#define MAX_VARIABLES 50
+#define MAX_TEMPORARIES 100
+
 // Estrutura para rastrear variáveis
 typedef struct {
     char name[50];
+    char type[20];
     int offset;
+    int size;
 } Variable;
 
-Variable variables[50];
-int var_count = 0;
-int current_offset = 0;
-int temp_count = 0;
-
-// Pilha para avaliação de expressões
 typedef struct {
     char op;
     int precedence;
 } Operator;
 
+typedef struct {
+    int line_number;
+    char code[MAX_LINE_LENGTH];
+} CodeLine;
+
+// Variáveis globais
+Variable variables[MAX_VARIABLES];
+int var_count = 0;
+int current_offset = 0;
+int temp_count = 0;
+int label_count = 0;
+
 Operator op_stack[100];
 int op_stack_top = -1;
 
-// Funções auxiliares para a pilha
+CodeLine output_code[1000];
+int code_line_count = 0;
+
+// Funções auxiliares para a pilha de operadores
 void push_op(char op, int precedence) {
     op_stack[++op_stack_top].op = op;
     op_stack[op_stack_top].precedence = precedence;
@@ -42,78 +57,123 @@ bool is_op_stack_empty() {
     return op_stack_top == -1;
 }
 
-int get_var_offset(const char *var_name) {
+// Adiciona uma linha de código à saída
+void add_code_line(const char *format, ...) {
+    va_list args;
+    va_start(args, format);
+    
+    if (code_line_count < 1000) {
+        output_code[code_line_count].line_number = code_line_count + 1;
+        vsnprintf(output_code[code_line_count].code, MAX_LINE_LENGTH, format, args);
+        code_line_count++;
+    }
+    
+    va_end(args);
+}
+
+// Encontra uma variável na tabela de símbolos
+Variable* find_variable(const char *var_name) {
     for (int i = 0; i < var_count; i++) {
         if (strcmp(variables[i].name, var_name) == 0) {
-            return variables[i].offset;
+            return &variables[i];
         }
     }
-    return -1;
+    return NULL;
 }
 
-void add_variable(const char *var_name) {
-    if (get_var_offset(var_name) == -1) {
-        int offset = var_count * 4;  // 0, 4, 8, 12...
+// Adiciona uma variável à tabela de símbolos
+void add_variable(const char *var_name, const char *var_type) {
+    if (find_variable(var_name)) return; // Variável já existe
+    
+    if (var_count < MAX_VARIABLES) {
         strcpy(variables[var_count].name, var_name);
-        variables[var_count].offset = offset;
+        strcpy(variables[var_count].type, var_type);
+        
+        // Determina o tamanho baseado no tipo
+        if (strcmp(var_type, "INT") == 0 || strcmp(var_type, "FLOAT") == 0) {
+            variables[var_count].size = 4;
+        } else if (strcmp(var_type, "DOUBLE") == 0 || strcmp(var_type, "LONG") == 0) {
+            variables[var_count].size = 8;
+        } else if (strcmp(var_type, "CHAR") == 0) {
+            variables[var_count].size = 1;
+        } else {
+            variables[var_count].size = 4; // Padrão para 4 bytes
+        }
+        
+        variables[var_count].offset = current_offset;
+        current_offset += variables[var_count].size;
         var_count++;
-        current_offset += 4;
     }
 }
 
-void generate_riscv_header(FILE *output) {
-    fprintf(output, ".text\n");
-    fprintf(output, ".globl main\n");
-    fprintf(output, "main:\n");
-    fprintf(output, "    addi sp, sp, -%d\n", current_offset);
+// Gera o cabeçalho do código RISC-V
+void generate_riscv_header() {
+    add_code_line(".text");
+    add_code_line(".globl main");
+    add_code_line("main:");
+    add_code_line("    addi sp, sp, -%d  # Aloca espaço na pilha", current_offset);
 }
 
-void generate_riscv_footer(FILE *output) {
-    fprintf(output, "\n    li a7, 10\n");
-    fprintf(output, "    ecall\n");
+// Gera o rodapé do código RISC-V
+void generate_riscv_footer() {
+    add_code_line("");
+    add_code_line("    # Finalização do programa");
+    add_code_line("    li a7, 10");
+    add_code_line("    ecall");
 }
 
-void generate_load_operand(FILE *output, const char *operand, const char *reg) {
+// Gera código para carregar um operando
+void generate_load_operand(const char *operand, const char *reg) {
     if (isdigit(operand[0])) {
-        fprintf(output, "    li %s, %s\n", reg, operand);
+        add_code_line("    li %s, %s  # Carrega constante", reg, operand);
     } else {
-        int offset = get_var_offset(operand);
-        if (offset != -1) {
-            fprintf(output, "    lw %s, %d(sp)\n", reg, offset);
+        Variable *var = find_variable(operand);
+        if (var) {
+            if (var->size == 4) {
+                add_code_line("    lw %s, %d(sp)  # Carrega variável '%s'", reg, var->offset, operand);
+            } else if (var->size == 8) {
+                add_code_line("    ld %s, %d(sp)  # Carrega variável double/long '%s'", reg, var->offset, operand);
+            } else if (var->size == 1) {
+                add_code_line("    lb %s, %d(sp)  # Carrega variável char '%s'", reg, var->offset, operand);
+            }
         } else {
-            fprintf(stderr, "Erro: Variável '%s' não declarada\n", operand);
+            add_code_line("    # ERRO: Variável '%s' não declarada", operand);
         }
     }
 }
 
-void generate_operation(FILE *output, char op, const char *reg1, const char *reg2, const char *reg_dest) {
+// Gera código para uma operação aritmética
+void generate_operation(char op, const char *reg1, const char *reg2, const char *reg_dest) {
     switch (op) {
         case '+':
-            fprintf(output, "    add %s, %s, %s\n", reg_dest, reg1, reg2);
+            add_code_line("    add %s, %s, %s  # Soma", reg_dest, reg1, reg2);
             break;
         case '-':
-            fprintf(output, "    sub %s, %s, %s\n", reg_dest, reg1, reg2);
+            add_code_line("    sub %s, %s, %s  # Subtração", reg_dest, reg1, reg2);
             break;
         case '*':
-            fprintf(output, "    mul %s, %s, %s\n", reg_dest, reg1, reg2);
+            add_code_line("    mul %s, %s, %s  # Multiplicação", reg_dest, reg1, reg2);
             break;
         case '/':
-            fprintf(output, "    div %s, %s, %s\n", reg_dest, reg1, reg2);
+            add_code_line("    div %s, %s, %s  # Divisão", reg_dest, reg1, reg2);
             break;
         case '%':
-            fprintf(output, "    rem %s, %s, %s\n", reg_dest, reg1, reg2);
+            add_code_line("    rem %s, %s, %s  # Resto", reg_dest, reg1, reg2);
             break;
     }
 }
 
-void generate_temp_store(FILE *output, int temp_num, const char *reg) {
-    fprintf(output, "    sw %s, %d(sp)\n", reg, current_offset + temp_num * 4);
+// Gera código para armazenar um valor temporário
+void generate_temp_store(int temp_num, const char *reg) {
+    add_code_line("    sw %s, %d(sp)  # Armazena temporário t%d", reg, current_offset + temp_num * 4, temp_num);
 }
 
-void generate_temp_load(FILE *output, int temp_num, const char *reg) {
-    fprintf(output, "    lw %s, %d(sp)\n", reg, current_offset + temp_num * 4);
+// Gera código para carregar um valor temporário
+void generate_temp_load(int temp_num, const char *reg) {
+    add_code_line("    lw %s, %d(sp)  # Carrega temporário t%d", reg, current_offset + temp_num * 4, temp_num);
 }
 
+// Retorna a precedência de um operador
 int get_precedence(char op) {
     switch (op) {
         case '+':
@@ -130,7 +190,8 @@ int get_precedence(char op) {
     }
 }
 
-void process_expression(FILE *output, const char *expr) {
+// Processa uma expressão e gera o código correspondente
+void process_expression(const char *expr) {
     char token[50];
     int token_pos = 0;
     int expr_len = strlen(expr);
@@ -138,10 +199,12 @@ void process_expression(FILE *output, const char *expr) {
     int temp_stack_top = -1;
     op_stack_top = -1;
     
+    add_code_line("    # Processando expressão: %s", expr);
+    
     for (int i = 0; i < expr_len; i++) {
         if (isspace(expr[i])) continue;
         
-        if (isalnum(expr[i])) {
+        if (isalnum(expr[i]) || expr[i] == '_') {
             // Coleta o token (número ou variável)
             token_pos = 0;
             while (i < expr_len && (isalnum(expr[i]) || expr[i] == '_')) {
@@ -154,8 +217,8 @@ void process_expression(FILE *output, const char *expr) {
             temp_stack[++temp_stack_top] = temp_count++;
             
             // Gera código para carregar o operando
-            generate_load_operand(output, token, "t0");
-            generate_temp_store(output, temp_stack[temp_stack_top], "t0");
+            generate_load_operand(token, "t0");
+            generate_temp_store(temp_stack[temp_stack_top], "t0");
         } else if (expr[i] == '(') {
             // Empilha o parêntese
             push_op('(', 0);
@@ -169,10 +232,10 @@ void process_expression(FILE *output, const char *expr) {
                 int op1 = temp_stack[temp_stack_top--];
                 int result = temp_count++;
                 
-                generate_temp_load(output, op1, "t0");
-                generate_temp_load(output, op2, "t1");
-                generate_operation(output, op.op, "t0", "t1", "t2");
-                generate_temp_store(output, result, "t2");
+                generate_temp_load(op1, "t0");
+                generate_temp_load(op2, "t1");
+                generate_operation(op.op, "t0", "t1", "t2");
+                generate_temp_store(result, "t2");
                 
                 temp_stack[++temp_stack_top] = result;
             }
@@ -195,10 +258,10 @@ void process_expression(FILE *output, const char *expr) {
                 int op1 = temp_stack[temp_stack_top--];
                 int result = temp_count++;
                 
-                generate_temp_load(output, op1, "t0");
-                generate_temp_load(output, op2, "t1");
-                generate_operation(output, op.op, "t0", "t1", "t2");
-                generate_temp_store(output, result, "t2");
+                generate_temp_load(op1, "t0");
+                generate_temp_load(op2, "t1");
+                generate_operation(op.op, "t0", "t1", "t2");
+                generate_temp_store(result, "t2");
                 
                 temp_stack[++temp_stack_top] = result;
             }
@@ -217,73 +280,79 @@ void process_expression(FILE *output, const char *expr) {
         int op1 = temp_stack[temp_stack_top--];
         int result = temp_count++;
         
-        generate_temp_load(output, op1, "t0");
-        generate_temp_load(output, op2, "t1");
-        generate_operation(output, op.op, "t0", "t1", "t2");
-        generate_temp_store(output, result, "t2");
+        generate_temp_load(op1, "t0");
+        generate_temp_load(op2, "t1");
+        generate_operation(op.op, "t0", "t1", "t2");
+        generate_temp_store(result, "t2");
         
         temp_stack[++temp_stack_top] = result;
     }
     
-    // O resultado final está no topo da pilha
-    temp_count = 0; // Reseta o contador de temporários para próxima expressão
+    temp_count = 0; // Reseta o contador de temporários
 }
 
-void generate_riscv_assignment(FILE *output, const char *var_name, const char *expr) {
-    int offset = get_var_offset(var_name);
-    if (offset == -1) {
-        fprintf(stderr, "Erro: Variável '%s' não declarada!\n", var_name);
+// Gera código para uma atribuição
+void generate_riscv_assignment(const char *var_name, const char *expr) {
+    Variable *var = find_variable(var_name);
+    if (!var) {
+        add_code_line("    # ERRO: Variável '%s' não declarada!", var_name);
         return;
     }
 
-    fprintf(output, "\n    # %s = %s\n", var_name, expr);
+    add_code_line("");
+    add_code_line("    # %s = %s", var_name, expr);
     
-    // Se for um número direto
+    // Casos simples: constante ou variável única
     if (isdigit(expr[0]) && strspn(expr, "0123456789") == strlen(expr)) {
-        fprintf(output, "    li t0, %s\n", expr);
-        fprintf(output, "    sw t0, %d(sp)\n", offset);
+        add_code_line("    li t0, %s", expr);
+        add_code_line("    sw t0, %d(sp)  # Armazena em %s", var->offset, var_name);
         return;
     }
     
-    // Se for uma variável simples
-    if (get_var_offset(expr) != -1 && strcspn(expr, "+-*/%()") == strlen(expr)) {
-        int src_offset = get_var_offset(expr);
-        fprintf(output, "    lw t0, %d(sp)\n", src_offset);
-        fprintf(output, "    sw t0, %d(sp)\n", offset);
+    if (find_variable(expr) && strcspn(expr, "+-*/%()") == strlen(expr)) {
+        Variable *src = find_variable(expr);
+        if (src->size == 4) {
+            add_code_line("    lw t0, %d(sp)  # Carrega %s", src->offset, expr);
+            add_code_line("    sw t0, %d(sp)  # Armazena em %s", var->offset, var_name);
+        } else if (src->size == 8) {
+            add_code_line("    ld t0, %d(sp)  # Carrega %s (double/long)", src->offset, expr);
+            add_code_line("    sd t0, %d(sp)  # Armazena em %s", var->offset, var_name);
+        }
         return;
     }
     
-    // Processa expressão complexa
-    process_expression(output, expr);
+    // Expressão complexa
+    process_expression(expr);
     
-    // O resultado está no último temporário (0)
-    fprintf(output, "    lw t0, %d(sp)\n", current_offset);
-    fprintf(output, "    sw t0, %d(sp)\n", offset);
+    // Armazena o resultado (último temporário) na variável
+    add_code_line("    lw t0, %d(sp)  # Carrega resultado", current_offset);
+    add_code_line("    sw t0, %d(sp)  # Armazena em %s", var->offset, var_name);
 }
 
-void generate_riscv_code(FILE *input, FILE *output) {
-    char line[256];
+// Processa o arquivo de entrada e gera o código RISC-V
+void generate_riscv_code(FILE *input) {
+    char line[MAX_LINE_LENGTH];
     char var_name[50];
-    char expr[100];
+    char var_type[20];
     
     // Primeira passada: declarações de variáveis
     while (fgets(line, sizeof(line), input) != NULL) {
-        if (sscanf(line, "Variavel %s criada!", var_name) == 1) {
-            add_variable(var_name);
+        if (sscanf(line, "Variavel %s %s criada!", var_type, var_name) == 2) {
+            add_variable(var_name, var_type); // Tipo padrão - precisa ser ajustado
         }
     }
     
     rewind(input);
-    generate_riscv_header(output);
+    generate_riscv_header();
     
     // Segunda passada: processar atribuições
     while (fgets(line, sizeof(line), input) != NULL) {
-        if (strstr(line, "Atribuicao:") != NULL) {
-            char* equal_pos = strchr(line, '=');
+        if (strstr(line, "=") != NULL) {
+            char *equal_pos = strchr(line, '=');
             if (equal_pos) {
                 *equal_pos = '\0';
-                char* lhs = line + strlen("Atribuicao: ");
-                char* rhs = equal_pos + 1;
+                char *lhs = line;
+                char *rhs = equal_pos + 1;
                 
                 // Remove espaços em branco
                 while(isspace(*lhs)) lhs++;
@@ -296,12 +365,28 @@ void generate_riscv_code(FILE *input, FILE *output) {
                 while(end > rhs && isspace(*end)) end--;
                 *(end+1) = '\0';
                 
-                generate_riscv_assignment(output, lhs, rhs);
+                generate_riscv_assignment(lhs, rhs);
             }
         }
     }
     
-    generate_riscv_footer(output);
+    generate_riscv_footer();
+}
+
+// Escreve o código gerado no arquivo de saída com numeração de linhas
+void write_output_with_line_numbers(FILE *output) {
+    // Primeiro calcula o maior número de linha para alinhamento
+    int max_line_num = code_line_count;
+    int num_digits = 1;
+    while (max_line_num >= 10) {
+        max_line_num /= 10;
+        num_digits++;
+    }
+    
+    // Escreve cada linha com numeração
+    for (int i = 0; i < code_line_count; i++) {
+        fprintf(output, "%*d: %s\n", num_digits, output_code[i].line_number, output_code[i].code);
+    }
 }
 
 int main(int argc, char **argv) {
@@ -323,11 +408,12 @@ int main(int argc, char **argv) {
         return 1;
     }
     
-    generate_riscv_code(input, output);
+    generate_riscv_code(input);
+    write_output_with_line_numbers(output);
     
     fclose(input);
     fclose(output);
     
-    printf("Código RISC-V gerado em %s\n", argv[2]);
+    printf("Código RISC-V gerado em %s com numeração de linhas\n", argv[2]);
     return 0;
 }
