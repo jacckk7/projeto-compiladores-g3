@@ -156,6 +156,8 @@ cmd:		ID '=' exp
 	if(!search(&ST, $1)) {
 		semanticError1 = 1;
 	}
+    printf("Atribuicao: %s = %s\n", $1, $3);
+    free($3);
 }
 ;
 exp:		INT				{ $$ = $1; }
@@ -206,20 +208,20 @@ void initSymbolTable(symbolTable* table) {
 }
 
 // insere um simbolo na tabela
+// Modifique a função insert() para:
 void insert(symbolTable* table, char* name) {
-	node* n = (node*) malloc(sizeof(node));
-	n->name = name;
-	n->type = strdup(currentType);
-	//printf("%s %s\n", n->type, n->name);
-	n->used = 0;
-	n->address = table->size; 
-	n->next = table->head;
+    node* n = (node*) malloc(sizeof(node));
+    n->name = name;
+    n->type = strdup(currentType);
+    n->used = 0;
+    n->address = table->size; 
+    n->next = table->head;
 
-	table->head = n;
-	table->size++;
+    table->head = n;
+    table->size++;
 
-	printf("Variavel %s criada!\n", n->name);
-	//print_table(&ST);
+    printf("Atribuicao: %s = 0;\n", n->name);  // Adiciona linha de inicialização
+    printf("Variavel %s %s criada!\n", n->type, n->name);
 }
 
 
@@ -237,10 +239,13 @@ int search(symbolTable* table, char* symbolName) {
 
 // printa todos os simbolos da tabela
 void print_table(symbolTable* table) {
-	printf("Name\t\tType\t\tUsed\t\tAddress\n");
-	for(node* n = table->head; n->name != "-1"; n = n->next) {
-		printf("%s\t\t%s\t\t%d\t\t%d\n", n->name, n->type, n->used, n->address);
-	}
+    printf("\nTabela de Símbolos:\n");
+    printf("Nome\tTipo\tUsado\tEndereço\n");
+    printf("------------------------------------------------\n");
+    for(node* n = table->head; n->name != "-1"; n = n->next) {
+        printf("%s\t\t%s\t\t%d\t\t%d\n", 
+               n->name, n->type, n->used, n->address * 4);  // Multiplica por 4 para mostrar o offset real
+    }
 }
 
 // retorna 1 se alguma variavel declarada nao for usada e 0 caso todas as variaveis decleradas sao usadas
