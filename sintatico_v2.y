@@ -220,7 +220,7 @@ void insert(symbolTable* table, char* name) {
     table->head = n;
     table->size++;
 
-    //printf("Atribuicao: %s = 0;\n", n->name);  // Adiciona linha de inicialização
+    //printf("Atribuicao: %s = 0;\n", n->name);  
     printf("Variavel %s %s criada!\n", n->type, n->name);
 }
 
