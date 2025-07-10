@@ -8,7 +8,7 @@
 #define MAX_LINE_LENGTH 256
 #define MAX_VARIABLES 50
 #define MAX_TEMPORARIES 100
-#define MAX_REGISTERS 7  // t0-t6 disponíveis para temporários
+#define MAX_REGISTERS 5  // t0-t4 disponíveis para otimização
 #define FIRST_TEMP_REG 0 // Índice do primeiro registrador temporário (t0)
 
 typedef struct {
@@ -28,31 +28,17 @@ typedef struct {
     char code[MAX_LINE_LENGTH];
 } CodeLine;
 
-typedef struct {
-    bool used;
-    int temp_number;  // Temporário associado (-1 se não associado)
-} RegisterStatus;
-
-typedef struct {
-    char name[50];
-    int reg; // -1 se não estiver em registrador
-} VarRegMap;
-
 Variable variables[MAX_VARIABLES];
 int var_count = 0;
 int current_offset = 0;
 int temp_count = 0;
-
-VarRegMap var_reg_map[MAX_VARIABLES];
-int var_reg_count = 0;
+int tmpOffset = 0;  // Controla alocação de registradores
 
 Operator op_stack[100];
 int op_stack_top = -1;
 
 CodeLine output_code[1000];
 int code_line_count = 0;
-
-RegisterStatus reg_status[MAX_REGISTERS];  // Status dos registradores t0-t6
 
 // Protótipos de funções
 void push_op(char op, int precedence);
@@ -73,15 +59,54 @@ bool is_numeric_constant(const char *str);
 void generate_riscv_assignment(const char *var_name, const char *expr);
 void generate_riscv_code(FILE *input, FILE *output);
 void write_output_with_line_numbers(FILE *output);
-int allocate_register_for_temp(int temp_num);
-void free_register(int reg_index);
-void free_temp(int temp_num);
 const char* get_reg_name(int index);
-int get_var_reg(const char *var_name);
-void set_var_reg(const char *var_name, int reg);
-void flush_vars_to_memory();
+bool is_in_register(int temp_num);
+void store_if_needed(int temp_num, const char *reg);
+void load_if_needed(int temp_num, const char *reg);
+
+// Variável global para controlar os registradores temporários
+int current_temp_reg = 0;  // 0=t0, 1=t1, ..., 4=t4
 
 // Implementação das funções
+
+const char* get_reg_name(int index) {
+    static const char* reg_names[] = {"t0", "t1", "t2", "t3", "t4"};
+    if (index >= 0 && index < MAX_REGISTERS) {
+        return reg_names[index];
+    }
+    return "t0";
+}
+
+bool is_in_register(int temp_num) {
+    // tmpOffset de 0 a -4 -> registradores
+    // tmpOffset <= -5 -> memória
+    return (tmpOffset + temp_num) >= -4;
+}
+
+int get_register_index(int tmpOffset) {
+    // Converte tmpOffset de -4 a 0 para índices 0 a 4
+    return (-tmpOffset) - 1;
+}
+
+void store_if_needed(int temp_num, const char *reg) {
+    if (!is_in_register(temp_num)) {
+        add_code_line("    sw %s, %d(sp)  # Temp%d -> memória\n", 
+                     reg, current_offset + temp_num * 4, temp_num);
+    }
+}
+
+void load_if_needed(int temp_num, const char *reg) {
+    if (is_in_register(temp_num)) {
+        int reg_index = get_register_index(temp_num);
+        if (strcmp(reg, get_reg_name(reg_index)) != 0) {
+            add_code_line("    mv %s, %s  # Temp%d já em registrador\n",
+                         reg, get_reg_name(reg_index), temp_num);
+        }
+    } else {
+        add_code_line("    lw %s, %d(sp)  # Carrega Temp%d\n", 
+                     reg, current_offset + temp_num * 4, temp_num);
+    }
+}
 
 void push_op(char op, int precedence) {
     op_stack[++op_stack_top].op = op;
@@ -145,54 +170,15 @@ void add_variable(const char *var_name, const char *var_type) {
     }
 }
 
-int get_var_reg(const char *var_name) {
-    for (int i = 0; i < var_reg_count; i++) {
-        if (strcmp(var_reg_map[i].name, var_name) == 0) {
-            return var_reg_map[i].reg;
-        }
-    }
-    return -1;
-}
-
-void set_var_reg(const char *var_name, int reg) {
-    for (int i = 0; i < var_reg_count; i++) {
-        if (strcmp(var_reg_map[i].name, var_name) == 0) {
-            var_reg_map[i].reg = reg;
-            return;
-        }
-    }
-    if (var_reg_count < MAX_VARIABLES) {
-        strcpy(var_reg_map[var_reg_count].name, var_name);
-        var_reg_map[var_reg_count].reg = reg;
-        var_reg_count++;
-    }
-}
-
-void flush_vars_to_memory() {
-    for (int i = 0; i < var_reg_count; i++) {
-        if (var_reg_map[i].reg != -1) {
-            Variable *var = find_variable(var_reg_map[i].name);
-            if (var) {
-                add_code_line("    sw %s, %d(sp)  # Armazena %s na memória\n",
-                            get_reg_name(var_reg_map[i].reg), var->offset, var_reg_map[i].name);
-            }
-            var_reg_map[i].reg = -1;
-        }
-    }
-}
-
 void generate_riscv_header() {
     add_code_line(".text\n");
     add_code_line(".globl main\n");
     add_code_line("main:\n");
-    add_code_line("    # Aloca espaço apenas para variáveis (%d bytes)\n", current_offset);
-    add_code_line("    addi sp, sp, -%d\n", current_offset);
-    add_code_line("    # Otimização: Variáveis serão mantidas em registradores quando possível\n");
+    add_code_line("    addi sp, sp, -%d  # Aloca espaço para variáveis\n", current_offset);
+    add_code_line("    # Otimização: usando tmpOffset para registradores t0-t4\n");
 }
 
 void generate_riscv_footer() {
-    // Garante que todas as variáveis estão na memória antes de sair
-    flush_vars_to_memory();
     add_code_line("\n    li a7, 10\n");
     add_code_line("    ecall\n");
 }
@@ -201,17 +187,6 @@ void generate_load_operand(const char *operand, const char *reg) {
     if (isdigit(operand[0])) {
         add_code_line("    li %s, %s\n", reg, operand);
     } else {
-        // Primeiro verifica se a variável está em algum registrador
-        int reg_index = get_var_reg(operand);
-        if (reg_index != -1) {
-            if (strcmp(reg, get_reg_name(reg_index)) != 0) {
-                add_code_line("    mv %s, %s  # %s já está em %s\n",
-                            reg, get_reg_name(reg_index), operand, get_reg_name(reg_index));
-            }
-            return;
-        }
-        
-        // Se não estiver em registrador, carrega da memória
         Variable *var = find_variable(operand);
         if (var) {
             add_code_line("    lw %s, %d(sp)  # Carrega %s\n", reg, var->offset, operand);
@@ -241,39 +216,20 @@ void generate_operation(char op, const char *reg1, const char *reg2, const char 
     }
 }
 
-int allocate_register_for_temp(int temp_num) {
-    for (int i = 0; i < MAX_REGISTERS; i++) {
-        if (!reg_status[i].used) {
-            reg_status[i].used = true;
-            reg_status[i].temp_number = temp_num;
-            return i;
-        }
+int get_precedence(char op) {
+    switch (op) {
+        case '+':
+        case '-':
+            return 1;
+        case '*':
+        case '/':
+        case '%':
+            return 2;
+        case '(':
+            return 0;
+        default:
+            return -1;
     }
-    return -1;  // Nenhum registrador disponível
-}
-
-void free_register(int reg_index) {
-    if (reg_index >= 0 && reg_index < MAX_REGISTERS) {
-        reg_status[reg_index].used = false;
-        reg_status[reg_index].temp_number = -1;
-    }
-}
-
-void free_temp(int temp_num) {
-    for (int i = 0; i < MAX_REGISTERS; i++) {
-        if (reg_status[i].temp_number == temp_num) {
-            free_register(i);
-            break;
-        }
-    }
-}
-
-const char* get_reg_name(int index) {
-    static const char* reg_names[] = {"t0", "t1", "t2", "t3", "t4", "t5", "t6"};
-    if (index >= 0 && index < MAX_REGISTERS) {
-        return reg_names[index];
-    }
-    return "t0";
 }
 
 void process_expression(const char *expr) {
@@ -283,11 +239,7 @@ void process_expression(const char *expr) {
     int temp_stack[100];
     int temp_stack_top = -1;
     op_stack_top = -1;
-
-    for (int i = 0; i < MAX_REGISTERS; i++) {
-        reg_status[i].used = false;
-        reg_status[i].temp_number = -1;
-    }
+    tmpOffset = 0;  // Resetar o offset para nova expressão
 
     for (int i = 0; i < expr_len; i++) {
         if (isspace(expr[i])) continue;
@@ -301,30 +253,20 @@ void process_expression(const char *expr) {
             i--;
             
             int current_temp = temp_count++;
-            int reg_index = allocate_register_for_temp(current_temp);
-            
-            if (reg_index != -1) {
-                add_code_line("    # Temp%d -> %s\n", current_temp, get_reg_name(reg_index));
-                
-                // Verifica se é uma variável já em registrador
-                int var_reg = get_var_reg(token);
-                if (var_reg != -1) {
-                    if (var_reg != reg_index) {
-                        add_code_line("    mv %s, %s  # Usa %s já em registrador\n",
-                                    get_reg_name(reg_index), get_reg_name(var_reg), token);
-                    }
-                } else {
-                    generate_load_operand(token, get_reg_name(reg_index));
-                }
+            if (is_in_register(current_temp)) {
+                int reg_index = get_register_index(current_temp);
+                add_code_line("    # Temp%d -> %s (tmpOffset=%d)\n", 
+                             current_temp, get_reg_name(reg_index), tmpOffset);
+                generate_load_operand(token, get_reg_name(reg_index));
             } else {
-                add_code_line("    # Temp%d -> memória (sp+%d)\n", 
-                            current_temp, current_offset + current_temp * 4);
+                add_code_line("    # Temp%d -> memória (tmpOffset=%d)\n", current_temp, tmpOffset);
                 generate_load_operand(token, "t0");
-                add_code_line("    sw t0, %d(sp)  # Armazena temporário\n", 
-                            current_offset + current_temp * 4);
+                add_code_line("    sw t0, %d(sp)  # Armazena Temp%d\n", 
+                            current_offset + current_temp * 4, current_temp);
             }
             
             temp_stack[++temp_stack_top] = current_temp;
+            tmpOffset--;  // Decrementa para o próximo temporário
         } else if (expr[i] == '(') {
             push_op('(', 0);
         } else if (expr[i] == ')') {
@@ -335,53 +277,21 @@ void process_expression(const char *expr) {
                 int op1_temp = temp_stack[temp_stack_top--];
                 int result_temp = temp_count++;
                 
-                bool op1_in_reg = false, op2_in_reg = false;
-                int op1_reg = -1, op2_reg = -1;
+                load_if_needed(op1_temp, "t0");
+                load_if_needed(op2_temp, "t1");
+                generate_operation(op.op, "t0", "t1", "t2");
                 
-                for (int i = 0; i < MAX_REGISTERS; i++) {
-                    if (reg_status[i].temp_number == op1_temp) {
-                        op1_in_reg = true;
-                        op1_reg = i;
-                    }
-                    if (reg_status[i].temp_number == op2_temp) {
-                        op2_in_reg = true;
-                        op2_reg = i;
-                    }
-                }
-                
-                int result_reg = allocate_register_for_temp(result_temp);
-                if (result_reg != -1) {
-                    if (op1_in_reg && op2_in_reg) {
-                        generate_operation(op.op, get_reg_name(op1_reg), get_reg_name(op2_reg), get_reg_name(result_reg));
-                    } else if (op1_in_reg) {
-                        add_code_line("    lw t0, %d(sp)  # Carrega Temp%d\n", 
-                                    current_offset + op2_temp * 4, op2_temp);
-                        generate_operation(op.op, get_reg_name(op1_reg), "t0", get_reg_name(result_reg));
-                    } else if (op2_in_reg) {
-                        add_code_line("    lw t0, %d(sp)  # Carrega Temp%d\n", 
-                                    current_offset + op1_temp * 4, op1_temp);
-                        generate_operation(op.op, "t0", get_reg_name(op2_reg), get_reg_name(result_reg));
-                    } else {
-                        add_code_line("    lw t0, %d(sp)  # Carrega Temp%d\n", 
-                                    current_offset + op1_temp * 4, op1_temp);
-                        add_code_line("    lw t1, %d(sp)  # Carrega Temp%d\n", 
-                                    current_offset + op2_temp * 4, op2_temp);
-                        generate_operation(op.op, "t0", "t1", get_reg_name(result_reg));
-                    }
-                    
-                    if (op1_in_reg) free_register(op1_reg);
-                    if (op2_in_reg) free_register(op2_reg);
+                if (is_in_register(result_temp)) {
+                    int reg_index = get_register_index(result_temp);
+                    add_code_line("    mv %s, t2  # Temp%d -> %s\n", 
+                                get_reg_name(reg_index), result_temp, get_reg_name(reg_index));
                 } else {
-                    add_code_line("    lw t0, %d(sp)  # Carrega Temp%d\n", 
-                                current_offset + op1_temp * 4, op1_temp);
-                    add_code_line("    lw t1, %d(sp)  # Carrega Temp%d\n", 
-                                current_offset + op2_temp * 4, op2_temp);
-                    generate_operation(op.op, "t0", "t1", "t2");
-                    add_code_line("    sw t2, %d(sp)  # Armazena Temp%d\n", 
+                    add_code_line("    sw t2, %d(sp)  # Temp%d -> memória\n", 
                                 current_offset + result_temp * 4, result_temp);
                 }
                 
                 temp_stack[++temp_stack_top] = result_temp;
+                tmpOffset--;  // Decrementa para o próximo temporário
             }
             
             if (!is_op_stack_empty() && peek_op().op == '(') {
@@ -398,53 +308,21 @@ void process_expression(const char *expr) {
                 int op1_temp = temp_stack[temp_stack_top--];
                 int result_temp = temp_count++;
                 
-                bool op1_in_reg = false, op2_in_reg = false;
-                int op1_reg = -1, op2_reg = -1;
+                load_if_needed(op1_temp, "t0");
+                load_if_needed(op2_temp, "t1");
+                generate_operation(op.op, "t0", "t1", "t2");
                 
-                for (int i = 0; i < MAX_REGISTERS; i++) {
-                    if (reg_status[i].temp_number == op1_temp) {
-                        op1_in_reg = true;
-                        op1_reg = i;
-                    }
-                    if (reg_status[i].temp_number == op2_temp) {
-                        op2_in_reg = true;
-                        op2_reg = i;
-                    }
-                }
-                
-                int result_reg = allocate_register_for_temp(result_temp);
-                if (result_reg != -1) {
-                    if (op1_in_reg && op2_in_reg) {
-                        generate_operation(op.op, get_reg_name(op1_reg), get_reg_name(op2_reg), get_reg_name(result_reg));
-                    } else if (op1_in_reg) {
-                        add_code_line("    lw t0, %d(sp)  # Carrega Temp%d\n", 
-                                    current_offset + op2_temp * 4, op2_temp);
-                        generate_operation(op.op, get_reg_name(op1_reg), "t0", get_reg_name(result_reg));
-                    } else if (op2_in_reg) {
-                        add_code_line("    lw t0, %d(sp)  # Carrega Temp%d\n", 
-                                    current_offset + op1_temp * 4, op1_temp);
-                        generate_operation(op.op, "t0", get_reg_name(op2_reg), get_reg_name(result_reg));
-                    } else {
-                        add_code_line("    lw t0, %d(sp)  # Carrega Temp%d\n", 
-                                    current_offset + op1_temp * 4, op1_temp);
-                        add_code_line("    lw t1, %d(sp)  # Carrega Temp%d\n", 
-                                    current_offset + op2_temp * 4, op2_temp);
-                        generate_operation(op.op, "t0", "t1", get_reg_name(result_reg));
-                    }
-                    
-                    if (op1_in_reg) free_register(op1_reg);
-                    if (op2_in_reg) free_register(op2_reg);
+                if (is_in_register(result_temp)) {
+                    int reg_index = get_register_index(result_temp);
+                    add_code_line("    mv %s, t2  # Temp%d -> %s\n", 
+                                get_reg_name(reg_index), result_temp, get_reg_name(reg_index));
                 } else {
-                    add_code_line("    lw t0, %d(sp)  # Carrega Temp%d\n", 
-                                current_offset + op1_temp * 4, op1_temp);
-                    add_code_line("    lw t1, %d(sp)  # Carrega Temp%d\n", 
-                                current_offset + op2_temp * 4, op2_temp);
-                    generate_operation(op.op, "t0", "t1", "t2");
-                    add_code_line("    sw t2, %d(sp)  # Armazena Temp%d\n", 
+                    add_code_line("    sw t2, %d(sp)  # Temp%d -> memória\n", 
                                 current_offset + result_temp * 4, result_temp);
                 }
                 
                 temp_stack[++temp_stack_top] = result_temp;
+                tmpOffset--;  // Decrementa para o próximo temporário
             }
             
             push_op(current_op, current_prec);
@@ -458,70 +336,28 @@ void process_expression(const char *expr) {
         int op1_temp = temp_stack[temp_stack_top--];
         int result_temp = temp_count++;
         
-        bool op1_in_reg = false, op2_in_reg = false;
-        int op1_reg = -1, op2_reg = -1;
+        load_if_needed(op1_temp, "t0");
+        load_if_needed(op2_temp, "t1");
+        generate_operation(op.op, "t0", "t1", "t2");
         
-        for (int i = 0; i < MAX_REGISTERS; i++) {
-            if (reg_status[i].temp_number == op1_temp) {
-                op1_in_reg = true;
-                op1_reg = i;
-            }
-            if (reg_status[i].temp_number == op2_temp) {
-                op2_in_reg = true;
-                op2_reg = i;
-            }
-        }
-        
-        int result_reg = allocate_register_for_temp(result_temp);
-        if (result_reg != -1) {
-            if (op1_in_reg && op2_in_reg) {
-                generate_operation(op.op, get_reg_name(op1_reg), get_reg_name(op2_reg), get_reg_name(result_reg));
-            } else if (op1_in_reg) {
-                add_code_line("    lw t0, %d(sp)  # Carrega Temp%d\n", 
-                            current_offset + op2_temp * 4, op2_temp);
-                generate_operation(op.op, get_reg_name(op1_reg), "t0", get_reg_name(result_reg));
-            } else if (op2_in_reg) {
-                add_code_line("    lw t0, %d(sp)  # Carrega Temp%d\n", 
-                            current_offset + op1_temp * 4, op1_temp);
-                generate_operation(op.op, "t0", get_reg_name(op2_reg), get_reg_name(result_reg));
-            } else {
-                add_code_line("    lw t0, %d(sp)  # Carrega Temp%d\n", 
-                            current_offset + op1_temp * 4, op1_temp);
-                add_code_line("    lw t1, %d(sp)  # Carrega Temp%d\n", 
-                            current_offset + op2_temp * 4, op2_temp);
-                generate_operation(op.op, "t0", "t1", get_reg_name(result_reg));
-            }
-            
-            if (op1_in_reg) free_register(op1_reg);
-            if (op2_in_reg) free_register(op2_reg);
+        if (is_in_register(result_temp)) {
+            int reg_index = get_register_index(result_temp);
+            add_code_line("    mv %s, t2  # Temp%d -> %s\n", 
+                        get_reg_name(reg_index), result_temp, get_reg_name(reg_index));
         } else {
-            add_code_line("    lw t0, %d(sp)  # Carrega Temp%d\n", 
-                        current_offset + op1_temp * 4, op1_temp);
-            add_code_line("    lw t1, %d(sp)  # Carrega Temp%d\n", 
-                        current_offset + op2_temp * 4, op2_temp);
-            generate_operation(op.op, "t0", "t1", "t2");
-            add_code_line("    sw t2, %d(sp)  # Armazena Temp%d\n", 
+            add_code_line("    sw t2, %d(sp)  # Temp%d -> memória\n", 
                         current_offset + result_temp * 4, result_temp);
         }
         
         temp_stack[++temp_stack_top] = result_temp;
+        tmpOffset--;  // Decrementa para o próximo temporário
     }
     
     // O último temporário é o resultado da expressão
     int final_temp = temp_stack[temp_stack_top];
-    bool final_in_reg = false;
-    int final_reg = -1;
-    
-    for (int i = 0; i < MAX_REGISTERS; i++) {
-        if (reg_status[i].temp_number == final_temp) {
-            final_in_reg = true;
-            final_reg = i;
-            break;
-        }
-    }
-    
-    if (final_in_reg) {
-        add_code_line("    # Resultado final em %s\n", get_reg_name(final_reg));
+    if (is_in_register(final_temp)) {
+        int reg_index = get_register_index(final_temp);
+        add_code_line("    # Resultado final em %s\n", get_reg_name(reg_index));
     } else {
         add_code_line("    lw t0, %d(sp)  # Carrega resultado final\n", 
                     current_offset + final_temp * 4);
@@ -539,83 +375,95 @@ bool is_numeric_constant(const char *str) {
     return true;
 }
 
+void generate_arithmetic_operation(const char *var_name, const char *expr);
+
 void generate_riscv_assignment(const char *var_name, const char *expr) {
     Variable *var = find_variable(var_name);
-    if (!var) {
-        add_code_line("    # ERRO: Variável '%s' não declarada!\n", var_name);
-        return;
-    }
+    if (var == NULL) return;
 
-    // Atribuição de constante
-    if (is_numeric_constant(expr)) {
-        int reg = allocate_register_for_temp(-1); // Aloca qualquer registrador
-        if (reg != -1) {
-            add_code_line("    li %s, %s  # %s = %s (em registrador)\n",
-                         get_reg_name(reg), expr, var_name, expr);
-            set_var_reg(var_name, reg);
+    // Verifica se é uma expressão aritmética
+    char *op_pos = strpbrk(expr, "+-*/");
+    if (op_pos != NULL) {
+        char op = *op_pos;
+        char left[20] = {0};
+        char right[20] = {0};
+        
+        // Extrai operandos
+        strncpy(left, expr, op_pos - expr);
+        strcpy(right, op_pos + 1);
+        
+        // Remove espaços
+        //remove_spaces(left);
+        //remove_spaces(right);
+
+        // Verifica se temos registradores suficientes (precisa de 3 livres: 2 operandos + resultado)
+        if (current_temp_reg <= 2) {
+            // Processa o operando esquerdo
+            generate_riscv_assignment("_temp_left", left);
+            const char *left_reg = get_reg_name(current_temp_reg-2);
+            
+            // Processa o operando direito (usa próximo registrador)
+            int right_reg_index = current_temp_reg;
+            generate_riscv_assignment("_temp_right", right);
+            const char *right_reg = get_reg_name(right_reg_index-1);
+            
+            // Usa o próximo registrador para o resultado
+            const char *dest_reg = get_reg_name(current_temp_reg);
+            
+            // Gera a operação
+            switch(op) {
+                case '+':
+                    add_code_line("    add %s, %s, %s  # %s = %s\n",
+                                dest_reg, left_reg, right_reg, var_name, expr);
+                    break;
+                case '-':
+                    add_code_line("    sub %s, %s, %s  # %s = %s\n",
+                                dest_reg, left_reg, right_reg, var_name, expr);
+                    break;
+                // Adicione outros operadores conforme necessário
+            }
+            
+            current_temp_reg += 2;  // Avança 2 posições (1 para cada operando + resultado)
             return;
         }
     }
-    
-    // Atribuição de outra variável
-    Variable *src_var = find_variable(expr);
-    if (src_var) {
-        int src_reg = get_var_reg(expr);
-        if (src_reg != -1) {
-            // Variável fonte está em registrador
-            int dest_reg = allocate_register_for_temp(-1);
-            if (dest_reg != -1) {
-                add_code_line("    mv %s, %s  # Copia %s para %s\n",
-                             get_reg_name(dest_reg), get_reg_name(src_reg), expr, var_name);
-                set_var_reg(var_name, dest_reg);
-                return;
-            }
+
+    // Código para atribuições simples
+    if (current_temp_reg <= 4) {
+        const char *reg_name = get_reg_name(current_temp_reg);
+        
+        if (expr[0] == 't' && isdigit(expr[1])) {
+            add_code_line("    mv %s, %s  # %s = %s\n",
+                         reg_name, expr, var_name, expr);
+        } else {
+            add_code_line("    li %s, %s  # %s = %s\n",
+                         reg_name, expr, var_name, expr);
         }
         
-        // Caso geral - carrega e armazena
-        add_code_line("    lw t0, %d(sp)  # Carrega %s\n", src_var->offset, expr);
-        add_code_line("    sw t0, %d(sp)  # Armazena em %s\n", var->offset, var_name);
-        return;
-    }
-
-    // Expressão complexa
-    process_expression(expr);
-    
-    // Verifica se o resultado está em registrador
-    bool result_in_reg = false;
-    int result_reg = -1;
-    
-    for (int i = 0; i < MAX_REGISTERS; i++) {
-        if (reg_status[i].temp_number == temp_count - 1) {
-            result_in_reg = true;
-            result_reg = i;
-            break;
-        }
-    }
-    
-    if (result_in_reg) {
-        // Mantém no registrador se possível
-        set_var_reg(var_name, result_reg);
-        add_code_line("    # %s mantido em %s\n", var_name, get_reg_name(result_reg));
+        current_temp_reg++;
     } else {
-        // Armazena na memória
-        add_code_line("    lw t0, %d(sp)  # Carrega resultado\n", current_offset + (temp_count-1)*4);
-        add_code_line("    sw t0, %d(sp)  # Armazena em %s\n", var->offset, var_name);
+        // Fallback para memória...
     }
 }
+
+// Função auxiliar para remover espaços
+void remove_spaces(char *str) {
+    char *dst = str;
+    while (*str) {
+        if (*str != ' ') {
+            *dst++ = *str;
+        }
+        str++;
+    }
+    *dst = '\0';
+}
+
 
 void generate_riscv_code(FILE *input, FILE *output) {
     char line[MAX_LINE_LENGTH];
     char var_name[50];
     char var_type[20];
     char expr[100];
-    
-    // Inicializa registradores
-    for (int i = 0; i < MAX_REGISTERS; i++) {
-        reg_status[i].used = false;
-        reg_status[i].temp_number = -1;
-    }
-    var_reg_count = 0;
     
     // Primeira passada: declarações
     while (fgets(line, sizeof(line), input)) {
