@@ -151,9 +151,7 @@ lista_ids:			ID ';'				{
 lista_cmds:	cmd							{;}
 		|   cmd lista_cmds			{;}
 ;
-cmd:		ID '=' exp ';'	{ 
-							printf("Expressao analisada: %s\n", $3);free($3);
-							//printf("%s\n", $1);
+cmd:		ID '=' exp ';'	{
 							if(!search(&ST, $1)) {
 								semanticError1 = 1;
 							}
@@ -172,7 +170,7 @@ exp:	  INT		{ $$ = $1; }
 					}		
 					$$ = $1;
 					}
-		| SCAN_KW '(' ')'	{;}
+		| SCAN_KW '(' ')'	{printf("ok!\n");}
     	| exp '+' exp		{ int size = snprintf(NULL, 0, "(%s + %s)", $1, $3) + 1;
           					$$ = malloc(size);
           					snprintf($$, size, "(%s + %s)", $1, $3);
@@ -285,6 +283,20 @@ int main(int argc, char **argv) {
 
 		// Ler linha a linha da entrada padrão
 		while (fgets(line, sizeof(line), stdin)) {
+
+			// Remover comentarios de linha unica
+			int em_string = -1;
+			for (int i = 0; line[i] != '\0'; i++) {
+				if (line[i] == '"' && (i == 0 || line[i - 1] != '\\')) {
+					em_string *= -1; // alterna o estado da string
+				}
+
+				if (em_string == -1 && line[i] == '/' && line[i + 1] == '/') {
+					line[i] = '\0'; // trunca a linha no início do comentário
+					break;
+				}
+			}
+
 			// Remove o \n do final da linha, se existir
 			line[strcspn(line, "\r\n")] = '\0';
 
