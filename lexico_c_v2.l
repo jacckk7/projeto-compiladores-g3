@@ -10,7 +10,7 @@ INT             [0-9]+
 ID		          [a-zA-Z_][a-zA-Z0-9_]*
 STRING          \"([^\\\n]|(\\.))*?\"
 CHAR            \'([^\\\n]|(\\.))*?\'
-OPERADOR        ("=="|"!="|"<="|">="|"->"|"++"|"--"|"||"|"&&"|"+="|"-="|"*="|"/="|"%=")
+OPERADOR        ("<"|">"|"=="|"!="|"<="|">=")
 coment_uma  	  "//".*
 esp_tab         [ \t]+
 outro		        .
@@ -19,7 +19,7 @@ outro		        .
 {INT}           {yylval.str = strdup(yytext); return INT;}
 {STRING}        {yylval.str = strdup(yytext); return STRING;}
 {CHAR}          {yylval.str = strdup(yytext); return CHAR;}
-{OPERADOR}	    {return OPERADOR;}
+{OPERADOR}	    {yylval.str = strdup(yytext); return OPERADOR;}
 
 {ID} {
   if      (strcmp(yytext, "auto") == 0)         return AUTO_KW;
@@ -59,6 +59,8 @@ outro		        .
   else if (strcmp(yytext, "_Bool") == 0)        return BOOL_KW;
   else if (strcmp(yytext, "_Complex") == 0)     return COMPLEX_KW;
   else if (strcmp(yytext, "_Imaginary") == 0)   return IMAGINARY_KW;
+  else if (strcmp(yytext, "printf") == 0)       return PRINT_KW;
+  else if (strcmp(yytext, "scanf") == 0)        return SCAN_KW;
   else {
     yylval.str = strdup(yytext);
     return ID;
@@ -77,8 +79,6 @@ outro		        .
 "&"             { return '&'; }
 "|"             { return '|'; }
 "!"             { return '!'; }
-"<"             { return '<'; }
-">"             { return '>'; }
 "^"             { return '^'; }
 "~"             { return '~'; }
 "?"             { return '?'; }

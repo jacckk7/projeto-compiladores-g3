@@ -14,12 +14,14 @@ extern FILE *yyin;
 extern FILE *yyout;
 
 char* currentType;
-int semanticError = 0;
+int semanticError1 = 0;
+int semanticError2 = 0;
 
 struct node {
 	char* name; 
 	char* type; 
-	int used; 
+	int used;
+	int address;
 	struct node* next; 
 };
 typedef struct node node;
@@ -46,6 +48,7 @@ int isNotUsedVariable(symbolTable* table);
     char *str;
 }
 %token <str> INT FLOAT ID
+%token <str> OPERADOR
 %type <str> exp
 
 // precedências dos operadores aritmeticos
@@ -55,9 +58,9 @@ int isNotUsedVariable(symbolTable* table);
 //%token INT
 //%token FLOAT
 //%token ID
+//%token OPERADOR
 %token STRING
 %token CHAR
-%token OPERADOR
 %token AUTO_KW
 %token BREAK_KW
 %token CASE_KW
@@ -95,6 +98,8 @@ int isNotUsedVariable(symbolTable* table);
 %token BOOL_KW
 %token COMPLEX_KW
 %token IMAGINARY_KW
+%token PRINT_KW
+%token SCAN_KW
 %%
 /* Regras definindo a GLC e acoes correspondentes */
 /* neste nosso exemplo quase todas as acoes estao vazias */
@@ -103,20 +108,19 @@ input:    /* empty */
 ;
 programa:	'{' lista_cmds '}'	{;}
 		|   lista_declaracoes  {;} 
-		|   lista_declaracoes '{' lista_cmds '}'
-{
-	printf("Sintaxe correta!\n");
-	if(semanticError) {
-		printf("ERROR: Variavel não declarada!\n");
-	} else {
-		if(isNotUsedVariable(&ST)) {
-			printf("WARNING: Variavel declarada não usada!\n");
-		} else {
-			printf("Semantica correta!\n");
-		}
-	}
-
-};
+		|   lista_declaracoes '{' '}'	{;}
+		|   lista_declaracoes '{' lista_cmds '}'{
+												printf("Sintaxe correta!\n");
+												if(semanticError1) {
+													printf("ERROR: Variavel nao declarada!\n");
+												} else if(semanticError2) {
+													printf("ERROR: Variavel ja declarada!\n");
+												} else if(isNotUsedVariable(&ST)) {
+													printf("WARNING: Variavel declarada nao usada!\n");
+												} else {
+													printf("Semantica correta!\n");
+												}
+												};
 
 lista_declaracoes: declaracao 
 		|		   declaracao lista_declaracoes
@@ -128,32 +132,43 @@ declaracao:         CHAR_KW {currentType = "CHAR";} lista_ids {;}
 		|           LONG_KW {currentType = "LONG";} lista_ids {;} 
 		|           SHORT_KW {currentType = "SHORT";} lista_ids {;} 
 ;
-lista_ids:			ID ';'	{insert(&ST, $1);}				
-		|			ID ',' lista_ids	{insert(&ST, $1);}							
+lista_ids:			ID ';'				{
+										if(!search(&ST, $1)) {
+											insert(&ST, $1);
+										} else {
+											semanticError2 = 1;
+										}
+										}
 
-lista_cmds:	cmd	';'			{;}
-		| cmd ';' lista_cmds	{;}
+		|			ID ',' lista_ids	{
+										if(!search(&ST, $1)) {
+											insert(&ST, $1);
+										} else {
+											semanticError2 = 1;
+										}
+										}
+
+lista_cmds:	cmd							{;}
+		|   cmd lista_cmds			{;}
 ;
 cmd:		ID '=' exp		
-			{  //printf("Expressao analisada: %s\n", $3);free($3);
-				//printf("%s\n", $1);
-				if(!search(&ST, $1)) {
-					semanticError = 1;
-				}
-				 printf("Atribuicao: %s = %s\n", $1, $3);
-				 free($1); free($3);
-			}	
-;
-exp:		INT				{ $$ = $1; }
-		| FLOAT				{ $$ = $1; }
-		| ID				
-{ 
+{ //printf("Expressao analisada: %s\n", $3);free($3);
+//printf("%s\n", $1);
 	if(!search(&ST, $1)) {
 		semanticError = 1;
-	}		
-					
-	$$ = $1;
+	}
 }
+;
+
+exp:	  INT		{ $$ = $1; }
+		| FLOAT	{ $$ = $1; }
+		| ID		{ 
+					if(!search(&ST, $1)) {
+						semanticError1 = 1;
+					}		
+					$$ = $1;
+					}
+		| SCAN_KW '(' ')'	{;}
     	| exp '+' exp		{ int size = snprintf(NULL, 0, "(%s + %s)", $1, $3) + 1;
           					$$ = malloc(size);
           					snprintf($$, size, "(%s + %s)", $1, $3);
@@ -176,6 +191,7 @@ exp:		INT				{ $$ = $1; }
           					free($1); free($3);}
 		| '(' exp ')'     	{ $$ = $2; }
 ;
+cond:	 exp OPERADOR exp	{printf("Expressao condicional: %s\n", $2);free($2);}
 %%
 
 void initSymbolTable(symbolTable* table) {
@@ -184,6 +200,7 @@ void initSymbolTable(symbolTable* table) {
     firstNode->name = "-1";
     firstNode->type = "-1";
     firstNode->used = -1;
+	firstNode->address = -1;
     firstNode->next = NULL;
 
     ST.size = 0;
@@ -197,6 +214,7 @@ void insert(symbolTable* table, char* name) {
 	n->type = strdup(currentType);
 	//printf("%s\n", n->type);
 	n->used = 0;
+	n->address = table->size; 
 	n->next = table->head;
 
 	table->head = n;
@@ -221,13 +239,13 @@ int search(symbolTable* table, char* symbolName) {
 
 // printa todos os simbolos da tabela
 void print_table(symbolTable* table) {
-	printf("Name\t\tType\t\tUsed\n");
+	printf("Name\t\tType\t\tUsed\t\tAddress\n");
 	for(node* n = table->head; n->name != "-1"; n = n->next) {
-		printf("%s\t\t%s\t\t%d\n", n->name, n->type, n->used);
+		printf("%s\t\t%s\t\t%d\t\t%d\n", n->name, n->type, n->used, n->address);
 	}
 }
 
-
+// retorna 1 se alguma variavel declarada nao for usada e 0 caso todas as variaveis decleradas sao usadas
 int isNotUsedVariable(symbolTable* table) {
 	for(node* n = table->head; n->name != "-1"; n = n->next) {
 		if(n->used == 0) {
@@ -235,6 +253,16 @@ int isNotUsedVariable(symbolTable* table) {
 		}
 	}
 	return 0;
+}
+
+// retorna o endereco de memória da variável ou -1, caso a variavel não tenha sido declarada
+int getVariableAddress(symbolTable* table, char* symbolName) {
+	for(node* n = table->head; n->name != "-1"; n = n->next) {
+		if(strcmp(n->name, symbolName) == 0) {
+			return n->address;
+		}
+	}
+	return -1;
 }
 
 
