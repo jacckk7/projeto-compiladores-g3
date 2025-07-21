@@ -1,16 +1,9 @@
 # Para compilar, faça:
 
 ```
->> flex lexico.l                 # Gera lex.yy.c
->> gcc lex.yy.c -o lexico.exe    # Compila com a biblioteca do Flex
->> ./lexico.exe < entrada.txt    # Roda passando a entrada (se não tiver entrada retire)
+>> make                                                   # Compilar tudo
+>> ./sintatico.exe < (teste).txt > sintatico_output.txt   # Passa o arquivo de teste para o sintatico verficar se ta tudo ok
+>> ./riscv_gen.exe sintatico_output.txt output.s          # Passa para o gerador para gerar código obj.s
+>> make clean                                             # Para apagar a compilação do make
 ```
 
-# Para compilar o analisador sintático
-
-```
->> bison -dv sintatico_v1.y                                 # Gera sintatico.tab.c e sintatico.tab.h
->> flex lexico_c_v2.l                                       # Gera lex.yy.c
->> gcc sintatico_v1.tab.c lex.yy.c -o sintatico.exe         # Compila com a biblioteca do Flex
->> ./sintatico.exe < entrada.txt                            # Roda passando a entrada (se não tiver entrada retire)
-```
