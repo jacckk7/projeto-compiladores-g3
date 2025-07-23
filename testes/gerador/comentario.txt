@@ -1,0 +1,3 @@
+// Este é um comentário
+int x; /* Outro comentário */
+x = 5; // Atribuição com valor

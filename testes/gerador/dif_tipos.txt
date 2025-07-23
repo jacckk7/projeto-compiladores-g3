@@ -1,0 +1,7 @@
+int a;
+float b;
+char c;
+{
+a = 42;
+b = 3.14159;
+c = 'Z';}

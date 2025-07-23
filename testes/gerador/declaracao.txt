@@ -1,0 +1,3 @@
+int a, b, c;
+float x, y;
+char ch;
