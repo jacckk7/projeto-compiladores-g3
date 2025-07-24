@@ -8,11 +8,11 @@ RM = rm -f
 # Nomes dos executáveis
 LEXICO = lexico.exe
 SINTATICO = sintatico.exe
-RISC_GEN = riscv_gen.exe
+RISC_GEN = riscv_gen2_otimizado.exe
 
 # Arquivos de teste
-TEST_INPUT = entrada.txt
-TEST_OUTPUT = output.s
+TEST_INPUT = aritmetica.txt
+TEST_OUTPUT = output_otimizado.s
 
 # Alvo padrão
 all: $(LEXICO) $(SINTATICO) $(RISC_GEN)
@@ -31,6 +31,11 @@ $(SINTATICO): sintatico_v3.y lexico_c_v2.l
 # Regra para o gerador de código RISC-V
 $(RISC_GEN): riscv_gen3.c
 	$(CC) riscv_gen3.c -o $(RISC_GEN)
+
+# Essa parte é com o otimizador, contudo ele não possui as últimas partes implementadas no gerador de código
+# Para testar o otimizador só comentar as duas linhas de cima e descomentar as duas linhas abaixo
+# $(RISC_GEN): riscv_gen2_otimizado.c
+# 	$(CC) riscv_gen2_otimizado.c -o $(RISC_GEN)
 
 # Regra para testar todo o pipeline
 test: all
