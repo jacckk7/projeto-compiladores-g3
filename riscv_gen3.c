@@ -335,7 +335,6 @@ void generate_while_loop(const char *condition, const char *body) {
     
     // Gera o corpo (simplificado)
     add_code_line("    # Corpo do while\n");
-    // Aqui você processaria o body
     
     add_code_line("    j L_while_start_%d\n", current_label);
     add_code_line("L_while_end_%d:\n", current_label);
@@ -393,7 +392,6 @@ void generate_riscv_assignment(const char *var_name, const char *expr) {
     add_code_line("    lw t0, %d(sp)  # Carrega resultado\n", TEMP_RESULT_OFFSET);
     add_code_line("    sw t0, %d(sp)  # Armazena em %s\n", var->offset, var_name);
     
-    // Limpeza do temporário (opcional)
     add_code_line("    sw zero, %d(sp)  # Limpa temporário\n", TEMP_RESULT_OFFSET);
 }
 
@@ -409,12 +407,6 @@ void write_output_with_line_numbers(FILE *output) {
         fprintf(output, "%*d: %s", num_digits, output_code[i].line_number, output_code[i].code);
     }
 }
-
-/**
- * Determina o tipo de uma expressão baseado em seus componentes
- * @param expr A expressão a ser analisada (ex: "x + 1.5", "'a'", "var")
- * @return Ponteiro para string com o tipo ("INT", "FLOAT", "CHAR", "STRING")
- */
 const char* get_expression_type(const char* expr) {
     // 1. Verifica se é uma constante char ('a')
     if (expr[0] == '\'') {
@@ -662,8 +654,6 @@ void generate_riscv_code(FILE *input, FILE *output) {
                 add_code_line("    # Print de expressão\n");
                 add_code_line("    lw a0, %d(sp)\n", TEMP_RESULT_OFFSET);
                 
-                // Verifica o tipo da expressão para usar a syscall correta
-                // (Aqui você precisaria de informação de tipo, simplificado para inteiro)
                 add_code_line("    li a7, 1\n");  // Código para print_int
                 add_code_line("    ecall\n");
             }
